@@ -2,77 +2,136 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
-public class UIMaskEraser : MonoBehaviour, IPointerDownHandler, IDragHandler
+namespace UIEraser
 {
-    [Header("Data")]
-    [SerializeField] private Image _image;
-    
-    [Header("Brush Settings")]
-    [SerializeField] private Texture2D brushTexture;
-    [SerializeField] private int eraseRadius = 16;
-    [SerializeField] private int maskResolution = 256;
-
-    private Material _material;
-    private Texture2D _maskTex;
-    private Color32[] _maskPixels;
-    private Rect r;
-
-    public void OnPointerDown(PointerEventData ev) => Erase(ev);
-    public void OnDrag(PointerEventData ev) => Erase(ev);
-    
-    private void Awake()
+    public sealed class UIMaskEraser : MonoBehaviour, IPointerDownHandler, IDragHandler
     {
-        r = _image.rectTransform.rect;
-        _material = Instantiate(_image.material);
-        _image.material = _material;
+        private const string MASK_TEXTURE_NAME = "_MaskTex";
 
-        _maskTex = new Texture2D(maskResolution, maskResolution, TextureFormat.R8, false);
-        _maskPixels = new Color32[maskResolution * maskResolution];
-        for (int i = 0; i < _maskPixels.Length; i++)
-            _maskPixels[i] = Color.white;
-        
-        _maskTex.SetPixels32(_maskPixels);
-        _maskTex.Apply();
+        [Header("Data")]
+        [SerializeField] private Image _image;
+    
+        [Header("Brush Settings")]
+        [Tooltip("If the texture is not readable, a copy is created")]
+        [SerializeField] private Texture2D _brushTexture;
+        [SerializeField] private int _eraseRadius = 50;
+        [SerializeField] private int _maskResolution = 1024;
 
-        _material.SetTexture("_MaskTex", _maskTex);
-    }
+        private Material _material;
+        private Texture2D _maskTex;
+        private Color32[] _maskPixels;
+        private Rect _imageRect;
 
-    private void Erase(PointerEventData ev)
-    {
-        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_image.rectTransform, ev.position, ev.pressEventCamera, out Vector2 lp)) 
-            return;
-
-        float u = (lp.x - r.x) / r.width;
-        float v = (lp.y - r.y) / r.height;
-        
-        if (u < 0f || u > 1f || v < 0f || v > 1f)
-            return;
-
-        int cx = Mathf.FloorToInt(u * maskResolution);
-        int cy = Mathf.FloorToInt(v * maskResolution);
-
-        int rPx = eraseRadius;
-        int minX = Mathf.Clamp(cx - rPx, 0, maskResolution - 1);
-        int maxX = Mathf.Clamp(cx + rPx, 0, maskResolution - 1);
-        int minY = Mathf.Clamp(cy - rPx, 0, maskResolution - 1);
-        int maxY = Mathf.Clamp(cy + rPx, 0, maskResolution - 1);
-
-        for (int y = minY; y <= maxY; y++)
+        public void OnPointerDown(PointerEventData ev) => Erase(ev);
+        public void OnDrag(PointerEventData ev) => Erase(ev);
+    
+        private void Awake()
         {
-            for (int x = minX; x <= maxX; x++)
+            InitializeBrushAnalysis();
+            _imageRect = _image.rectTransform.rect;
+            _material = Instantiate(_image.material);
+            _image.material = _material;
+
+            _maskTex = new Texture2D(_maskResolution, _maskResolution, TextureFormat.R8, false);
+            _maskPixels = new Color32[_maskResolution * _maskResolution];
+            for (int i = 0; i < _maskPixels.Length; i++)
             {
-                float bu = (x - (cx - rPx)) / (float)(rPx * 2);
-                float bv = (y - (cy - rPx)) / (float)(rPx * 2);
-                if (bu < 0f || bu > 1f || bv < 0f || bv > 1f) continue;
+                _maskPixels[i] = Color.white;
+            }
+            _maskTex.SetPixels32(_maskPixels);
+            _maskTex.Apply();
 
-                float a = brushTexture.GetPixelBilinear(bu, bv).a;
-                if (a < 0.01f) continue;
+            _material.SetTexture(MASK_TEXTURE_NAME, _maskTex);
+        }
 
-                _maskPixels[y * maskResolution + x] = new Color32(0, 0, 0, 0);
+        private void InitializeBrushAnalysis()
+        {
+            if(_brushTexture.isReadable == false)
+            {
+                RenderTexture tempRT = RenderTexture.GetTemporary
+                (
+                    _brushTexture.width,
+                    _brushTexture.height,
+                    0,
+                    RenderTextureFormat.Default,
+                    RenderTextureReadWrite.Linear
+                );
+
+                Graphics.Blit(_brushTexture, tempRT);
+
+                RenderTexture previousActiveRT = RenderTexture.active;
+                RenderTexture.active = tempRT;
+
+                Texture2D readableTexture = new Texture2D
+                (
+                    _brushTexture.width,
+                    _brushTexture.height,
+                    TextureFormat.RGBA32,
+                    false
+                );
+
+                readableTexture.ReadPixels(new Rect(0, 0, tempRT.width, tempRT.height), 0, 0);
+                readableTexture.Apply();
+
+                RenderTexture.active = previousActiveRT;
+                RenderTexture.ReleaseTemporary(tempRT);
+
+                _brushTexture = readableTexture;
             }
         }
 
-        _maskTex.SetPixels32(_maskPixels);
-        _maskTex.Apply(updateMipmaps: false);
+        private void Erase(PointerEventData eventData)
+        {
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_image.rectTransform, eventData.position, eventData.pressEventCamera, out Vector2 lp))
+            {
+                return;
+            }
+
+            float u = (lp.x - _imageRect.x) / _imageRect.width;
+            float v = (lp.y - _imageRect.y) / _imageRect.height;
+    
+            if (u < 0f || u > 1f || v < 0f || v > 1f)
+            {
+                return;
+            }
+
+            int cx = Mathf.FloorToInt(u * _maskResolution);
+            int cy = Mathf.FloorToInt(v * _maskResolution);
+
+            int rPx = _eraseRadius;
+            int minX = Mathf.Clamp(cx - rPx, 0, _maskResolution - 1);
+            int maxX = Mathf.Clamp(cx + rPx, 0, _maskResolution - 1);
+            int minY = Mathf.Clamp(cy - rPx, 0, _maskResolution - 1);
+            int maxY = Mathf.Clamp(cy + rPx, 0, _maskResolution - 1);
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    float bu = (x - (cx - rPx)) / (float)(rPx * 2);
+                    float bv = (y - (cy - rPx)) / (float)(rPx * 2);
+                    if (bu < 0f || bu > 1f || bv < 0f || bv > 1f)
+                    {
+                        continue;
+                    }
+
+                    float brushAlpha = _brushTexture.GetPixelBilinear(bu, bv).a;
+                    if (brushAlpha < 0.01f)
+                    {
+                        continue;
+                    }
+
+                    int index = y * _maskResolution + x;
+                    byte currentMask = _maskPixels[index].r;
+                    float currentNormalized = currentMask / 255f;
+                    float newValue = Mathf.Max(0, currentNormalized - brushAlpha);
+                    byte newMask = (byte)(newValue * 255);
+                    _maskPixels[index].r = newMask;
+                }
+            }
+
+            _maskTex.SetPixels32(_maskPixels);
+            _maskTex.Apply(updateMipmaps: false);
+        }
     }
 }

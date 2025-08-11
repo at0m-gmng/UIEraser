@@ -37,7 +37,7 @@ Shader "UI/UIEraser"
             {
                 float2 uv = IN.uv;
                 fixed4 baseCol = tex2D(_MainTex, TRANSFORM_TEX(uv, _MainTex)) * IN.col;
-                fixed mask   = tex2D(_MaskTex, TRANSFORM_TEX(uv, _MaskTex)).r;
+                fixed mask = tex2D(_MaskTex, TRANSFORM_TEX(uv, _MaskTex)).r;
                 baseCol.a *= mask;
                 return baseCol;
             }
